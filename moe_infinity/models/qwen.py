@@ -7,17 +7,26 @@ from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeMLP
 import moe_infinity._store as prefetch_lib
 
 
+def _get_qwen3_num_experts(config) -> int:
+    for name in ("num_experts", "n_routed_experts", "num_local_experts"):
+        value = getattr(config, name, None)
+        if value is not None:
+            return int(value)
+    raise AttributeError(
+        "Qwen3 config is missing expert-count attributes: "
+        "num_experts / n_routed_experts / num_local_experts"
+    )
+
+
 class Qwen3MoEBlock(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.num_experts = config.num_experts
+        self.num_experts = _get_qwen3_num_experts(config)
         self.top_k = config.num_experts_per_tok
         self.norm_topk_prob = config.norm_topk_prob
 
         # gating
-        self.gate = nn.Linear(
-            config.hidden_size, config.num_experts, bias=False
-        )
+        self.gate = nn.Linear(config.hidden_size, self.num_experts, bias=False)
         self.experts = nn.ModuleList(
             [
                 Qwen3MoeMLP(

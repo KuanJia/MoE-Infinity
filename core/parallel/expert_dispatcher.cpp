@@ -32,13 +32,13 @@ ExpertDispatcher::ExpertDispatcher(int num_experts, int num_layers, int dtype,
       // input_cv_(kNumDevices),
       // exec_mutex_(kNumDevices),
       // exec_cv_(kNumDevices),
-      cache_mutex_(kNumDevices),
-      cache_cv_(kNumDevices),
-      input_queue_(kNumDevices),
-      gpu_overload_(kNumDevices, false),
-      exec_queue_(kNumDevices),
-      cached_experts_(kNumDevices),
-      modules_(kNumDevices, nullptr) {
+      cache_mutex_(kNumDevices()),
+      cache_cv_(kNumDevices()),
+      input_queue_(kNumDevices()),
+      gpu_overload_(kNumDevices(), false),
+      exec_queue_(kNumDevices()),
+      cached_experts_(kNumDevices()),
+      modules_(kNumDevices(), nullptr) {
   main_thread_stop_flag_.store(false);
 
   // module_ = new MoEMLP(dtype, expert_type);
@@ -47,7 +47,7 @@ ExpertDispatcher::ExpertDispatcher(int num_experts, int num_layers, int dtype,
   // gpu_overload_ = std::move(std::vector<Futex<bool>>(kNumDevices,
   // initial_value));
 
-  for (int i = 0; i < kNumDevices; ++i) {
+  for (int i = 0; i < kNumDevices(); ++i) {
     auto thread_func = std::bind(&ExpertDispatcher::GPUFetchFunc, this, i);
     std::string thread_name = "GPUFetchFunc" + std::to_string(i);
     threads_.emplace_back(new base::Thread(thread_func, thread_name));
@@ -70,8 +70,8 @@ ExpertDispatcher::ExpertDispatcher(int num_experts, int num_layers, int dtype,
     // cudaDeviceSynchronize();
 
     auto thread_func =
-        std::bind(&ExpertDispatcher::GPUExecFunc, this, i % kNumDevices);
-    std::string thread_name = "GPUExecFunc" + std::to_string(i % kNumDevices);
+        std::bind(&ExpertDispatcher::GPUExecFunc, this, i % kNumDevices());
+    std::string thread_name = "GPUExecFunc" + std::to_string(i % kNumDevices());
     threads_.emplace_back(new base::Thread(thread_func, thread_name));
     threads_.back()->start();
     // SetThreadAffinity(threads_.back()->tid());
@@ -134,10 +134,12 @@ void ExpertDispatcher::Enqueue(CallArgs& args) {
   auto expert_node = experts_[expert_idx][layer_idx];
 
   if (!expert_node->node->mutex.try_lock()) {
-    // NOTE: try lock must success, if there is no prefetching
-    DLOG_FATAL("ExpertDispatcher::Enqueue: mutex try_lock failed (expert_idx ",
-               expert_idx, " layer_idx ", layer_idx, "node ",
-               expert_node->node->str(), ")");
+    DLOG_WARN(
+        "ExpertDispatcher::Enqueue: waiting for locked expert node "
+        "(expert_idx ",
+        expert_idx, " layer_idx ", layer_idx, " node ",
+        expert_node->node->str(), ")");
+    expert_node->node->mutex.lock();
   }
   expert_node->node->last_access_time = MCIROSECONDS_SINCE_EPOCH;
 
@@ -201,7 +203,7 @@ void ExpertDispatcher::RegisterExpert(
 }
 
 void ExpertDispatcher::NotifyFetchStart() {
-  for (int i = 0; i < kNumDevices; ++i) {
+  for (int i = 0; i < kNumDevices(); ++i) {
     // std::unique_lock<std::mutex> lock(input_mutex_[i]);
     input_queue_[i].NotifyAll();
   }
@@ -271,6 +273,9 @@ void ExpertDispatcher::GPUFetchFunc(int gpu_id) {
     // lock.unlock();
     CallArgs args;
     input_queue_[gpu_id].Pop(args);
+    if (main_thread_stop_flag_.load()) {
+      break;
+    }
 
     auto device = CUDA_DEVICE(gpu_id);
     auto original_device = (args.remote) ? CPU_DEVICE : hidden_states_.device();
@@ -450,6 +455,9 @@ void ExpertDispatcher::GPUExecFunc(int gpu_id) {
 
     ExecArgs args;
     exec_queue_[gpu_id].Pop(args);
+    if (main_thread_stop_flag_.load()) {
+      break;
+    }
 
     if (args.expert_node == nullptr) {
       continue;

@@ -8,6 +8,7 @@
 #include "common/pytorch.h"
 
 #include <c10/cuda/CUDACachingAllocator.h>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,10 +37,15 @@ class HostMemoryPool : public base::noncopyable {
 
   HostMemoryPool();
   virtual ~HostMemoryPool() {
-    auto allocator = c10::HostCachingAllocator::get();
+    auto allocator =
+        use_pinned_host_allocator_ ? c10::HostCachingAllocator::get() : nullptr;
     for (auto& [key, data_ptr] : allocated_id_) {
       if (data_ptr != nullptr) {
-        allocator->free(data_ptr);
+        if (use_pinned_host_allocator_) {
+          allocator->free(data_ptr);
+        } else {
+          std::free(data_ptr);
+        }
       }
     }
     allocated_id_.clear();
@@ -47,6 +53,7 @@ class HostMemoryPool : public base::noncopyable {
 
  private:
   std::unordered_map<std::uint64_t, void*> allocated_id_;
+  bool use_pinned_host_allocator_ = false;
   std::int64_t free_memory_;
   std::int64_t memory_capacity_;
   std::mutex mutex_;

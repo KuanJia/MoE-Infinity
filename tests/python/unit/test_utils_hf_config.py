@@ -68,6 +68,13 @@ def test_parse_moe_param_mixtral_and_deepseek():
     )
     assert parse_moe_param(deepseek) == (9, 12, 0)
 
+    qwen3 = _cfg(
+        architectures=["Qwen3MoeForCausalLM"],
+        num_hidden_layers=11,
+        n_routed_experts=16,
+    )
+    assert parse_moe_param(qwen3) == (11, 16, 0)
+
 
 def test_parse_expert_id_switch_and_mixtral():
     switch = _cfg(

@@ -5,6 +5,7 @@
 
 #include "memory_pool.h"
 
+#include "aio/archer_prio_aio_handle.h"
 #include "common/types.h"
 #include "host_caching_allocator.h"
 #include "memory/stream_pool.h"
@@ -14,6 +15,7 @@
 #include <ATen/cuda/CachingHostAllocator.h>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cstdlib>
 #include <sys/sysinfo.h>
 #include <unistd.h>
 
@@ -35,9 +37,16 @@ void* HostMemoryPool::AllocateMemory(const std::size_t key,
     DLOG_ERROR("PreAllocateMemory failed, already allocated ", key);
     return allocated_id_[key];
   }
-  auto allocator = c10::HostCachingAllocator::get();
-  auto data_ptr = allocator->allocate(size);
+  void* data_ptr = nullptr;
+  if (use_pinned_host_allocator_) {
+    auto allocator = c10::HostCachingAllocator::get();
+    data_ptr = allocator->allocate(size);
+  } else if (posix_memalign(&data_ptr, kAioAlignment, size) != 0) {
+    DLOG_FATAL("HostMemoryPool aligned allocation failed, size=", size);
+    return nullptr;
+  }
   allocated_id_.insert(std::make_pair(key, data_ptr));
+  free_memory_ -= size;
   return data_ptr;
 }
 
@@ -52,23 +61,28 @@ int HostMemoryPool::FreeMemory(const std::size_t key, void* data,
   }
   allocated_id_.erase(key);
   if (data != nullptr) {
-    auto allocator = c10::HostCachingAllocator::get();
-    allocator->free(data);
+    if (use_pinned_host_allocator_) {
+      auto allocator = c10::HostCachingAllocator::get();
+      allocator->free(data);
+    } else {
+      std::free(data);
+    }
   }  // pinned_mr_->raw_deallocate(data);
   free_memory_ += size;
   return 0;
 }
 
 HostMemoryPool::HostMemoryPool()
-    : free_memory_(
+    : use_pinned_host_allocator_(
+          std::getenv("MOE_INFINITY_PINNED_HOST_ALLOC") != nullptr),
+      free_memory_(
 #ifdef TEST_LIMIT_MEMORY
           10LL * 1024 * 1024 * 1024
 #else
           GetTotalSystemMemory() * HOST_MEMORY_RATIO
 #endif
       ) {
-  auto pinned_mr_ = c10::HostCachingAllocator::get();
-  if (pinned_mr_ == nullptr) {
+  if (use_pinned_host_allocator_ && c10::HostCachingAllocator::get() == nullptr) {
     DLOG_ERROR("GetHostAllocator failed");
     exit(-1);
   }

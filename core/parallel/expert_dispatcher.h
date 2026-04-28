@@ -50,6 +50,16 @@ class ExpertDispatcher : public base::noncopyable {
                             int expert_type, int num_threads = 1);
   ~ExpertDispatcher() {
     main_thread_stop_flag_.store(true);
+    for (std::size_t i = 0; i < threads_.size(); ++i) {
+      for (auto& queue : input_queue_) {
+        CallArgs args;
+        queue.Push(args);
+      }
+      for (auto& queue : exec_queue_) {
+        ExecArgs args;
+        queue.Push(args);
+      }
+    }
     for (auto& thread : threads_) {
       thread->join();
     }

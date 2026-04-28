@@ -5,6 +5,16 @@ import torch
 from transformers import PretrainedConfig
 
 
+def _first_present_attr(config: PretrainedConfig, *names: str) -> int:
+    for name in names:
+        value = getattr(config, name, None)
+        if value is not None:
+            return int(value)
+    raise AttributeError(
+        f"None of the expected config attributes exist: {', '.join(names)}"
+    )
+
+
 def parse_expert_dtype(config: PretrainedConfig) -> int:
     dtype = config.torch_dtype
     if dtype == torch.bfloat16:
@@ -41,7 +51,9 @@ def parse_moe_param(config: PretrainedConfig) -> Tuple[int, int, int]:
         num_encoder_layers = 0
         num_decoder_layers = config.num_hidden_layers
         num_layers = config.num_hidden_layers
-        num_experts = config.num_experts
+        num_experts = _first_present_attr(
+            config, "num_experts", "n_routed_experts", "num_local_experts"
+        )
     elif "deepseek" in arch:
         num_encoder_layers = 0
         num_decoder_layers = config.num_hidden_layers

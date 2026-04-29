@@ -105,7 +105,7 @@ class ExpertDispatcher : public base::noncopyable {
   // void GPUThreadFunc(int gpu_id);
 
   void OutputFunc(ExecArgs args, torch::Tensor output, torch::Tensor token_mask,
-                  int gpu_id);
+                  int gpu_id, cudaStream_t stream);
 
   ExpertNodePtr FindExpertEvict(int gpu_id);
 

@@ -497,14 +497,15 @@ void ExpertDispatcher::GPUExecFunc(int gpu_id) {
     // cudaStreamSynchronize(stream);  // make sure the input is ready
 
     auto output = modules_[gpu_id]->forward(input, stream);
-    OutputFunc(args, output, token_mask, gpu_id);
+    OutputFunc(args, output, token_mask, gpu_id, stream);
   }
 
   cudaStreamDestroy(stream);
 }
 
 void ExpertDispatcher::OutputFunc(ExecArgs args, torch::Tensor output,
-                                  torch::Tensor token_mask, int gpu_id) {
+                                  torch::Tensor token_mask, int gpu_id,
+                                  cudaStream_t stream) {
   auto output_device =
       (args.out_gpu_id < 0) ? CPU_DEVICE : CUDA_DEVICE(args.out_gpu_id);
   torch::Tensor output_tensor = output.to(output_device).to(torch::kFloat32);
@@ -562,6 +563,7 @@ void ExpertDispatcher::OutputFunc(ExecArgs args, torch::Tensor output,
     auto weighted_output = output_tensor * weights;
     final_hidden_states_.index_add_(0, token_indices, weighted_output);
   }
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   // {
   //   std::lock_guard<std::mutex> lock(output_mutex_);
   //   output_queue_.emplace_back(std::move(output_tensor),

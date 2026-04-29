@@ -60,6 +60,11 @@ class DistributedExpertExecutor:
 
     def wait_dispatch_local(self):
         result = self.expert_dispatcher.wait_expert()
+        if isinstance(result, torch.Tensor) and result.is_cuda:
+            # The native dispatcher writes the returned tensor on its own CUDA
+            # stream. Make the wait API honor that work before the next layer
+            # consumes or overwrites dispatcher state.
+            torch.cuda.synchronize(result.device)
 
         return result
 

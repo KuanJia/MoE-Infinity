@@ -519,7 +519,7 @@ void ExpertDispatcher::OutputFunc(ExecArgs args, torch::Tensor output,
   int64_t layer_idx = args.expert_node->layer_idx;
   int64_t batch_size = hidden_states_.size(0);
 
-  args.expert_node->node->mutex.unlock();
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   if (args.evict) {
     // pop out overloaded expert such that cache is not polluted
     args.expert_node->node->SetDevice(args.expert_node->node->default_host,
@@ -542,6 +542,7 @@ void ExpertDispatcher::OutputFunc(ExecArgs args, torch::Tensor output,
     // gpu_overload_[gpu_id].set_and_wake(true);
     gpu_overload_[gpu_id] = false;
   }
+  args.expert_node->node->mutex.unlock();
   cache_cv_[gpu_id].notify_all();
 
   // if (args.evict) {
@@ -553,17 +554,20 @@ void ExpertDispatcher::OutputFunc(ExecArgs args, torch::Tensor output,
   //   }
   // }
 
-  if (batch_size == 1) {
-    final_hidden_states_.add_(
-        output_tensor *
-        router_weight_.index({torch::indexing::Slice(), expert_idx}));
-  } else {
-    auto token_indices = torch::nonzero(token_mask).squeeze(1);
-    auto weights = router_weight_.index({token_mask, expert_idx}).unsqueeze(1);
-    auto weighted_output = output_tensor * weights;
-    final_hidden_states_.index_add_(0, token_indices, weighted_output);
+  {
+    std::lock_guard<std::mutex> lock(output_mutex_);
+    if (batch_size == 1) {
+      final_hidden_states_.add_(
+          output_tensor *
+          router_weight_.index({torch::indexing::Slice(), expert_idx}));
+    } else {
+      auto token_indices = torch::nonzero(token_mask).squeeze(1);
+      auto weights = router_weight_.index({token_mask, expert_idx}).unsqueeze(1);
+      auto weighted_output = output_tensor * weights;
+      final_hidden_states_.index_add_(0, token_indices, weighted_output);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(stream));
   }
-  CUDA_CHECK(cudaStreamSynchronize(stream));
   // {
   //   std::lock_guard<std::mutex> lock(output_mutex_);
   //   output_queue_.emplace_back(std::move(output_tensor),

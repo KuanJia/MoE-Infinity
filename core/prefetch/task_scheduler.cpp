@@ -95,7 +95,6 @@ void ArcherTaskPool::EnqueueTask(const TaskPtr& task) {
                                        (task->node->corr_id & 0xffffffff));
             bool need_remove =
                 (is_same_node && is_lower_priority) || is_outdate_layers;
-            if (need_remove) t->node->mutex.unlock();
             return need_remove;
           });
       unified_queue_[i].erase(it, unified_queue_[i].end());

@@ -205,7 +205,6 @@ void ArcherPrefetchHandle::ReplaceCacheCandidates(
   std::vector<NodePtr> candidates;
   for (std::uint32_t tensor_id : tensor_ids) {
     auto node = kTopologyHandle->GetNodeFromTensorID(tensor_id);
-    node->mutex.try_lock();
     candidates.push_back(node);
   }
 

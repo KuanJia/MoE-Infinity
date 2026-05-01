@@ -5,9 +5,19 @@
 
 
 import numpy as np
+import os
 from transformers import PretrainedConfig
 
 from moe_infinity.utils import parse_moe_param
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get("MOE_INFINITY_DEBUG", "0").lower() not in {"", "0", "false", "no"}
+
+
+def _debug_log(message: str) -> None:
+    if _debug_enabled():
+        print(f"[moe-inf-debug] {message}", flush=True)
 
 
 class ExpertPrefetcher(object):
@@ -26,12 +36,17 @@ class ExpertPrefetcher(object):
         self.archer_engine = archer_engine
 
     def prefetch_experts_list(self, layer_id, expert_list):
+        _debug_log(f"prefetch-list-start layer={layer_id} experts={list(expert_list)}")
         tensor_ids = []
         for j in expert_list:
             tensor_ids.append(self.expert_tensor_map[(layer_id, j)])
+        _debug_log(f"prefetch-list-tensors layer={layer_id} tensor_ids={tensor_ids}")
         for tensor_id in tensor_ids:
             gpu_id = self.archer_engine.get_node_default_device([tensor_id])
+            _debug_log(f"prefetch-enqueue-start layer={layer_id} tensor_id={tensor_id} gpu_id={gpu_id}")
             self.archer_engine.enqueue_prefetch(tensor_id, gpu_id)
+            _debug_log(f"prefetch-enqueue-finish layer={layer_id} tensor_id={tensor_id} gpu_id={gpu_id}")
+        _debug_log(f"prefetch-list-finish layer={layer_id} count={len(tensor_ids)}")
 
     def fetch_experts_lock_cache(self, layer_id, expert_list):
         tensor_ids = []

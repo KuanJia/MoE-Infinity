@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 
 #include "utils/cuda_utils.h"
@@ -126,7 +127,7 @@ class MoELayer : public base::noncopyable {
     // Perform the gating operation on stream_
     c10::cuda::CUDAStream torch_stream =
         c10::cuda::getStreamFromExternal(stream_, device_id_);
-    c10::cuda::setCurrentCUDAStream(torch_stream);
+    c10::cuda::CUDAStreamGuard guard(torch_stream);
 
     int64_t num_tokens = gating_outputs.size(0);
     assert(num_tokens <= max_tokens_);
@@ -212,6 +213,9 @@ class MoELayer : public base::noncopyable {
     TENSOR_INS(ExpertRouterWeight)
         .scatter_add_(1, TENSOR_INS(TopKIndices),
                       routing_weights);  // Set routing weights mask
+    // The dispatcher consumes these routing tensors on its own CUDA streams.
+    // Make the private top-k stream complete before returning the tensor views.
+    cudaStreamSynchronize(stream_);
     // std::cout << "TopKSoftmax completed on device: " <<
     // TENSOR_INS(ExpertRouterMask)
     //           << std::endl;

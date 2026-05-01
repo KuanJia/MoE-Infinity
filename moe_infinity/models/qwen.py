@@ -1,3 +1,5 @@
+import os
+
 import nvtx
 import torch
 import torch.nn as nn
@@ -5,6 +7,29 @@ import torch.nn.functional as F
 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeMLP
 
 import moe_infinity._store as prefetch_lib
+
+
+def _debug_enabled() -> bool:
+    return os.environ.get("MOE_INFINITY_DEBUG", "0").lower() not in {"", "0", "false", "no"}
+
+
+def _sync_debug_enabled() -> bool:
+    return os.environ.get("MOE_INFINITY_SYNC_DEBUG", "0").lower() not in {"", "0", "false", "no"}
+
+
+def _debug_log(message: str) -> None:
+    if _debug_enabled():
+        print(f"[moe-inf-debug] {message}", flush=True)
+
+
+def _debug_sync(label: str, device: torch.device | None = None) -> None:
+    if not _sync_debug_enabled() or not torch.cuda.is_available():
+        return
+    if device is not None and device.type == "cuda":
+        torch.cuda.synchronize(device)
+    else:
+        torch.cuda.synchronize()
+    _debug_log(f"sync label={label}")
 
 
 def _get_qwen3_num_experts(config) -> int:
@@ -44,9 +69,27 @@ class Qwen3MoEBlock(nn.Module):
     @nvtx.annotate("Qwen3Prepare", color="blue")
     def __prepare_expert_route(self, hidden_states):
         # router_logits: (batch * sequence_length, n_experts)
+        _debug_log(
+            "qwen3-prepare-start "
+            f"layer={self.layer_id} hidden_shape={tuple(hidden_states.shape)} "
+            f"hidden_dtype={hidden_states.dtype} hidden_device={hidden_states.device}"
+        )
         router_logits = self.gate(hidden_states)
+        _debug_sync(f"qwen3-gate layer={self.layer_id}", hidden_states.device)
+        _debug_log(
+            "qwen3-topk-start "
+            f"layer={self.layer_id} logits_shape={tuple(router_logits.shape)} "
+            f"logits_dtype={router_logits.dtype} logits_device={router_logits.device}"
+        )
 
         router_mask, routing_weights_mask = self.lib.topk_softmax(router_logits)
+        _debug_sync(f"qwen3-topk layer={self.layer_id}", router_logits.device)
+        _debug_log(
+            "qwen3-topk-finish "
+            f"layer={self.layer_id} router_mask_shape={tuple(router_mask.shape)} "
+            f"router_mask_dtype={router_mask.dtype} routing_weights_shape={tuple(routing_weights_mask.shape)} "
+            f"routing_weights_dtype={routing_weights_mask.dtype}"
+        )
         # routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
         # routing_weights, selected_experts = torch.topk(
         #     routing_weights, self.top_k, dim=-1
@@ -82,6 +125,11 @@ class Qwen3MoEBlock(nn.Module):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """ """
         batch_size, sequence_length, hidden_dim = hidden_states.shape
+        _debug_log(
+            "qwen3-block-start "
+            f"layer={self.layer_id} batch={batch_size} seq={sequence_length} hidden_dim={hidden_dim} "
+            f"dtype={hidden_states.dtype} device={hidden_states.device}"
+        )
         hidden_states = hidden_states.view(-1, hidden_dim)
 
         router_logits, router_mask, routing_weights_mask = (
@@ -105,10 +153,22 @@ class Qwen3MoEBlock(nn.Module):
         #     )
         # router_mask = router_mask[:, :, 0]
 
+        _debug_log(
+            "qwen3-dispatch-start "
+            f"layer={self.layer_id} flat_tokens={hidden_states.shape[0]} "
+            f"router_mask_shape={tuple(router_mask.shape)} weights_shape={tuple(routing_weights_mask.shape)}"
+        )
         self.expert_executor.dispatch_local(
             self.layer_id, hidden_states, router_mask, routing_weights_mask
         )
+        _debug_log(f"qwen3-wait-start layer={self.layer_id}")
         final_hidden_states = self.expert_executor.wait_dispatch_local()
+        _debug_sync(f"qwen3-dispatch layer={self.layer_id}", hidden_states.device)
+        _debug_log(
+            "qwen3-wait-finish "
+            f"layer={self.layer_id} final_shape={tuple(final_hidden_states.shape)} "
+            f"final_dtype={final_hidden_states.dtype} final_device={final_hidden_states.device}"
+        )
         # final_hidden_states = torch.zeros(
         #     (batch_size * sequence_length, hidden_dim),
         #     dtype=hidden_states.dtype,

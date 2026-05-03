@@ -432,7 +432,6 @@ void MoEMLP::SetTensorsFromIds(const std::vector<std::uint32_t>& tensor_ids) {
 torch::Tensor MoEMLP::forward(torch::Tensor hidden_states,
                               cudaStream_t stream) {
   int64_t batch_size = hidden_states.size(0);
-  int64_t hdim = hidden_states.size(1);
 
   DLOG_FATAL_IF(batch_size > kMaxTokens || batch_size <= 0,
                 "batch_size should be (0,", kMaxTokens, "] , but got",
@@ -443,11 +442,12 @@ torch::Tensor MoEMLP::forward(torch::Tensor hidden_states,
 
   auto& input_ = buffer_[0];
   auto& output_ = buffer_[1];
+  auto input = input_.narrow(0, 0, batch_size);
 
-  // copy hidden_states to input_ using cudaMemcpy
-  cudaMemcpy(input_.data_ptr(), hidden_states.data_ptr(),
-             hidden_states.numel() * hidden_states.element_size(),
-             cudaMemcpyDeviceToDevice);
+  CUDA_CHECK(cudaMemcpyAsync(input.data_ptr(), hidden_states.data_ptr(),
+                             hidden_states.numel() *
+                                 hidden_states.element_size(),
+                             cudaMemcpyDeviceToDevice, stream));
   // cudaStreamSynchronize(stream);
   // if (warmup_count_ == 0 && graph_mode_) {
   //   graph_.replay();
@@ -464,9 +464,9 @@ torch::Tensor MoEMLP::forward(torch::Tensor hidden_states,
   //   warmup_count_--;
   //   ForwardHelper();
   // }
-  ForwardHelper(stream);
+  ForwardHelper(batch_size, stream);
   param_set_ = false;
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   // auto options = torch::TensorOptions()
   //                    .dtype(dtype_to_torch(dtype_))
   //                    .device(CUDA_DEVICE(at::cuda::current_device()));
@@ -474,10 +474,10 @@ torch::Tensor MoEMLP::forward(torch::Tensor hidden_states,
   // output.copy_(output_.index({torch::indexing::Slice(0, batch_size)}));
   // cudaStreamSynchronize(stream);
   // return std::move(output);
-  return output_.index({torch::indexing::Slice(0, batch_size)});
+  return output_.narrow(0, 0, batch_size);
 }
 
-void MoEMLP::ForwardHelper(cudaStream_t stream) {
+void MoEMLP::ForwardHelper(int64_t batch_size, cudaStream_t stream) {
   torch::NoGradGuard no_grad;
   if (expert_type_ == DEEPSEEK_MOE_DENSE_ACT_DENSE ||
       expert_type_ == MIXTRAL_MOE_DENSE_ACT_DENSE) {
@@ -487,10 +487,10 @@ void MoEMLP::ForwardHelper(cudaStream_t stream) {
     auto& down_proj =
         (expert_type_ == DEEPSEEK_MOE_DENSE_ACT_DENSE) ? param_[2] : param_[1];
 
-    auto& input = buffer_[0];
-    auto& output = buffer_[1];
-    auto& gate_out = buffer_[2];
-    auto& fused_out = buffer_[3];  // silu(gate) * up result
+    auto input = buffer_[0].narrow(0, 0, batch_size);
+    auto output = buffer_[1].narrow(0, 0, batch_size);
+    auto gate_out = buffer_[2].narrow(0, 0, batch_size);
+    auto fused_out = buffer_[3].narrow(0, 0, batch_size);
 
     DLOG_TRACE("MoEMLP::forward: gate_proj", gate_proj.sizes().vec(), "up_proj",
                up_proj.sizes().vec(), "down_proj", down_proj.sizes().vec(),

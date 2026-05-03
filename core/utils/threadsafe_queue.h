@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <mutex>
 #include <queue>
 
@@ -27,7 +29,9 @@ class ThreadSafeQueue : public base::noncopyable {
   // Pops an item from the queue (blocking).
   bool Pop(T& item) {
     std::unique_lock<std::mutex> lock(mutex_);
-    cond_.wait(lock, [this] { return !queue_.empty(); });
+    while (queue_.empty()) {
+      cond_.wait_for(lock, std::chrono::milliseconds(10));
+    }
 
     item = std::move(queue_.front());
     queue_.pop();
@@ -51,8 +55,12 @@ class ThreadSafeQueue : public base::noncopyable {
     return queue_.empty();
   }
 
+  size_t Size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return queue_.size();
+  }
+
   void NotifyAll() {
-    // std::lock_guard<std::mutex> lock(mutex_);
     cond_.notify_all();
   }
 

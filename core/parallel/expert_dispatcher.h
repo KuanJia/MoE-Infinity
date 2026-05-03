@@ -6,9 +6,11 @@
 #pragma once
 
 #include <torch/extension.h>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -89,6 +91,9 @@ class ExpertDispatcher : public base::noncopyable {
   void ClearExpertCacheCounts();
   void SetExpectedQueue(int expected_pending = 0) {
     pending_.store(expected_pending);
+    if (expected_pending == 0) {
+      pending_cv_.notify_all();
+    }
   }
 
   std::vector<CallResult> WaitExpert() { return Wait(); }
@@ -107,7 +112,17 @@ class ExpertDispatcher : public base::noncopyable {
   void OutputFunc(ExecArgs args, torch::Tensor output, torch::Tensor token_mask,
                   int gpu_id, cudaStream_t stream);
 
+  void RefreshCacheState(int gpu_id);
+  // Returns an evictable expert with its node mutex held, or nullptr.
   ExpertNodePtr FindExpertEvict(int gpu_id);
+  void SetExecState(int gpu_id, int stage, int64_t layer_idx,
+                    int64_t expert_idx);
+  void SetFetchState(int gpu_id, int stage, int64_t layer_idx,
+                     int64_t expert_idx);
+  std::string ExecStateString();
+  std::string FetchStateString();
+  std::string QueueStateString();
+  void NotifyWorkerQueues();
 
  private:
   std::vector<std::unique_ptr<base::Thread>> threads_;
@@ -139,6 +154,14 @@ class ExpertDispatcher : public base::noncopyable {
   std::vector<std::condition_variable> cache_cv_;
 
   std::mutex output_mutex_;
+  std::mutex exec_state_mutex_;
+  std::vector<int> exec_stage_;
+  std::vector<int64_t> exec_layer_;
+  std::vector<int64_t> exec_expert_;
+  std::mutex fetch_state_mutex_;
+  std::vector<int> fetch_stage_;
+  std::vector<int64_t> fetch_layer_;
+  std::vector<int64_t> fetch_expert_;
   // std::mutex exec_mutex_;
   // std::mutex gpu_overload_mutex_;
 

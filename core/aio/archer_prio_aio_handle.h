@@ -70,6 +70,9 @@ class ArcherPrioAioHandle {
   std::int64_t Read(const std::string& filename, void* buffer,
                     const bool high_prio, const std::int64_t num_bytes,
                     const std::int64_t offset);
+  std::int64_t ReadSync(const std::string& filename, void* buffer,
+                        const std::int64_t num_bytes,
+                        const std::int64_t offset);
   std::int64_t Write(const std::string& filename, const void* buffer,
                      const bool high_prio, const std::int64_t num_bytes,
                      const std::int64_t offset);

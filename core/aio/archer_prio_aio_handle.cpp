@@ -49,6 +49,10 @@ std::int64_t ArcherPrioAioHandle::Read(const std::string& filename,
                                        void* buffer, const bool high_prio,
                                        const std::int64_t num_bytes,
                                        const std::int64_t offset) {
+  if (high_prio) {
+    return ReadSync(filename, buffer, num_bytes, offset);
+  }
+
   int fd = -1;
   {
     std::lock_guard<std::mutex> lock(file_set_mutex_);
@@ -76,6 +80,29 @@ std::int64_t ArcherPrioAioHandle::Read(const std::string& filename,
       return io_request->pending_callbacks.load() == 0;
     });
   }
+
+  return num_bytes_aligned;
+}
+
+std::int64_t ArcherPrioAioHandle::ReadSync(const std::string& filename,
+                                           void* buffer,
+                                           const std::int64_t num_bytes,
+                                           const std::int64_t offset) {
+  int fd = -1;
+  {
+    std::lock_guard<std::mutex> lock(file_set_mutex_);
+    auto file = file_set_.find(filename);
+    if (file == file_set_.end()) {
+      fd = ArcherOpenFile(filename.c_str());
+      file_set_.insert(std::make_pair(filename, fd));
+    }
+    fd = file_set_[filename];
+  }
+
+  std::int64_t num_bytes_aligned =
+      (num_bytes + kAioAlignment - 1) & ~(kAioAlignment - 1);
+
+  ArcherReadFile(fd, buffer, num_bytes_aligned, offset);
 
   return num_bytes_aligned;
 }

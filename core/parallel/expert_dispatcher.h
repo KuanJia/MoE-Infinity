@@ -106,6 +106,7 @@ class ExpertDispatcher : public base::noncopyable {
 
   void GPUFetchFunc(int gpu_id);
   void GPUExecFunc(int gpu_id);
+  void ProcessExecArgs(ExecArgs args, int gpu_id, cudaStream_t stream);
 
   // void GPUThreadFunc(int gpu_id);
 
